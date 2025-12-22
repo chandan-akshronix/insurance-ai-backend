@@ -1,0 +1,32 @@
+# FastAPI and Web Server
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+
+# Database
+sqlalchemy>=2.0.23
+# Using psycopg2 instead of psycopg2-binary due to Python 3.13 compatibility
+psycopg2>=2.9.9
+
+# Validation and Serialization
+pydantic>=2.7.4  # Required by langchain and other dependencies
+
+# Environment Variables
+python-dotenv>=1.0.0
+
+# File Upload
+python-multipart>=0.0.6
+
+# Azure Storage
+azure-storage-blob>=12.19.0
+
+# Date and Time
+python-dateutil>=2.8.2
+
+# MongoDB async driver
+motor>=3.1.1
+
+# Password Hashing
+# Note: bcrypt must be <4.0.0 for compatibility with passlib 1.7.4
+passlib[bcrypt]>=1.7.4
+bcrypt<4.0.0
+
