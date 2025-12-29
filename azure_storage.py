@@ -5,8 +5,11 @@ from dotenv import load_dotenv
 from typing import Optional
 import uuid
 from datetime import datetime
+import logging
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 class AzureStorageService:
     """Service for handling Azure Blob Storage operations"""
@@ -19,17 +22,29 @@ class AzureStorageService:
         
         if not self.connection_string:
             # Make Azure Storage optional - log warning but don't raise error
+            logger.warning("AZURE_STORAGE_CONNECTION_STRING environment variable is not set. File upload functionality will use local storage.")
             print("WARNING: AZURE_STORAGE_CONNECTION_STRING environment variable is not set. File upload functionality will be disabled.")
             self.blob_service_client = None
             return
         
+        # Log connection string status (masked for security)
+        conn_preview = self.connection_string[:30] + "..." + self.connection_string[-20:] if len(self.connection_string) > 50 else "***"
+        logger.info(f"Initializing Azure Blob Storage with connection string: {conn_preview}")
+        logger.info(f"Container name: {self.container_name}")
+        
         # Initialize BlobServiceClient
         try:
+            logger.info("Creating BlobServiceClient...")
             self.blob_service_client = BlobServiceClient.from_connection_string(self.connection_string)
+            logger.info("✅ BlobServiceClient created successfully")
+            
             # Ensure container exists
             self._ensure_container_exists()
+            logger.info("✅ Azure Blob Storage initialized successfully")
         except Exception as e:
-            print(f"WARNING: Failed to initialize Azure Storage: {e}. File upload functionality will be disabled.")
+            error_msg = f"Failed to initialize Azure Storage: {e}"
+            logger.error(error_msg, exc_info=True)
+            print(f"WARNING: {error_msg}. File upload functionality will be disabled.")
             self.blob_service_client = None
     
     def _ensure_container_exists(self):
@@ -38,11 +53,17 @@ class AzureStorageService:
             return
         try:
             container_client = self.blob_service_client.get_container_client(self.container_name)
-            if not container_client.exists():
+            if container_client.exists():
+                logger.info(f"Container '{self.container_name}' already exists")
+            else:
+                logger.info(f"Container '{self.container_name}' does not exist, creating...")
                 container_client.create_container()
+                logger.info(f"✅ Container '{self.container_name}' created successfully")
                 print(f"Container '{self.container_name}' created successfully")
         except Exception as e:
-            print(f"Error ensuring container exists: {e}")
+            error_msg = f"Error ensuring container exists: {e}"
+            logger.error(error_msg, exc_info=True)
+            print(error_msg)
             raise
     
     def upload_file(self, file_content: bytes, file_name: str, folder: Optional[str] = None) -> str:
@@ -50,16 +71,19 @@ class AzureStorageService:
         Upload a file to Azure Blob Storage with support for nested folder paths.
         
         Azure Blob Storage supports nested folder structures by using '/' in blob names.
+        Azure automatically creates virtual folders when using '/' in blob names - no explicit folder creation needed.
+        
         Examples of valid folder paths:
         - 'users/123/kyc' -> creates nested structure users/123/kyc/
-        - 'claims/456' -> creates nested structure claims/456/
+        - 'claims/456/death-certificate' -> creates nested structure claims/456/death-certificate/
+        - 'claims/pending/123/claim-form' -> creates nested structure claims/pending/123/claim-form/
         - 'users/123/id_cards' -> creates nested structure users/123/id_cards/
         
         Args:
             file_content: File content as bytes
             file_name: Original file name
             folder: Optional folder path supporting nested directories
-                   (e.g., 'users/123/kyc', 'claims/456', 'users/123/policies')
+                   (e.g., 'users/123/kyc', 'claims/456/death-certificate', 'claims/pending/123/claim-form')
         
         Returns:
             Blob URL of the uploaded file
@@ -77,8 +101,23 @@ class AzureStorageService:
                 # Normalize folder path (remove leading/trailing slashes)
                 folder = folder.strip('/')
                 blob_name = f"{folder}/{unique_file_name}"
+                
+                # Log folder structure for debugging
+                folder_parts = folder.split('/')
+                logger.info(f"[AZURE_UPLOAD] Folder structure: {' > '.join(folder_parts)}")
+                logger.info(f"[AZURE_UPLOAD] Full blob path: {blob_name}")
+                
+                # Log category-based folder creation if applicable
+                if len(folder_parts) >= 3 and folder_parts[0] == 'claims':
+                    if len(folder_parts) == 3:
+                        # claims/{claimId}/{category}
+                        logger.info(f"[AZURE_UPLOAD] ✅ Category-based folder: claims/{folder_parts[1]}/{folder_parts[2]}")
+                    elif len(folder_parts) == 4 and folder_parts[1] == 'pending':
+                        # claims/pending/{userId}/{category}
+                        logger.info(f"[AZURE_UPLOAD] ✅ Category-based pending folder: claims/pending/{folder_parts[2]}/{folder_parts[3]}")
             else:
                 blob_name = unique_file_name
+                logger.info(f"[AZURE_UPLOAD] Uploading to root: {blob_name}")
             
             # Get blob client
             blob_client = self.blob_service_client.get_blob_client(
@@ -86,15 +125,22 @@ class AzureStorageService:
                 blob=blob_name
             )
             
-            # Upload file
+            # Upload file (Azure will automatically create virtual folders)
+            logger.info(f"[AZURE_UPLOAD] Uploading file '{file_name}' ({len(file_content):,} bytes) to blob: {blob_name}")
             blob_client.upload_blob(file_content, overwrite=True)
             
             # Return blob URL
             blob_url = blob_client.url
+            logger.info(f"[AZURE_UPLOAD] ✅ Successfully uploaded to Azure Blob Storage")
+            logger.info(f"[AZURE_UPLOAD]   Blob URL: {blob_url}")
+            logger.info(f"[AZURE_UPLOAD]   Folder structure created automatically by Azure")
+            
             return blob_url
         
         except Exception as e:
-            print(f"Error uploading file to Azure Storage: {e}")
+            error_msg = f"Error uploading file to Azure Storage: {e}"
+            logger.error(error_msg, exc_info=True)
+            print(error_msg)
             raise
     
     def download_file(self, blob_name: str) -> bytes:

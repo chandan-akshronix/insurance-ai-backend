@@ -104,3 +104,44 @@ def root():
 @app.get("/health")
 def health_check():
     return {"status": "healthy", "database": "connected"}
+
+@app.get("/health/storage")
+def storage_health_check():
+    """Check Azure Blob Storage configuration and status"""
+    from azure_storage import azure_storage
+    import os
+    
+    has_connection_string = bool(os.getenv("AZURE_STORAGE_CONNECTION_STRING"))
+    has_client = hasattr(azure_storage, 'blob_service_client') and azure_storage.blob_service_client is not None
+    container_name = azure_storage.container_name
+    
+    status = {
+        "azure_configured": has_connection_string,
+        "azure_connected": has_client,
+        "container_name": container_name,
+        "storage_type": "azure" if has_client else "local"
+    }
+    
+    if has_client:
+        try:
+            # Test connection by checking container
+            container_client = azure_storage.blob_service_client.get_container_client(container_name)
+            container_exists = container_client.exists()
+            status["container_exists"] = container_exists
+            
+            if container_exists:
+                # Count blobs (limit to avoid performance issues)
+                blobs = list(container_client.list_blobs())
+                status["total_files"] = len(blobs)
+                status["status"] = "healthy"
+            else:
+                status["status"] = "warning"
+                status["message"] = f"Container '{container_name}' does not exist"
+        except Exception as e:
+            status["status"] = "error"
+            status["error"] = str(e)
+    else:
+        status["status"] = "local_fallback"
+        status["message"] = "Azure Storage not configured, using local storage"
+    
+    return status

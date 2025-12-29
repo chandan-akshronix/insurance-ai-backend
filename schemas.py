@@ -107,6 +107,7 @@ class PolicyBase(BaseModel):
 
 class PolicyCreate(PolicyBase):
     userId: int
+    status: str = 'Active'  # Default status for new policies
 
 class Policy(PolicyBase):
     policyId: int

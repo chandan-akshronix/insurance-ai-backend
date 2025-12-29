@@ -58,6 +58,7 @@ async def create_application(request: Request, payload: dict):
                     "policyNumber": policy_obj.get('policyNumber') or ("LIF" + datetime.utcnow().strftime("%Y%m%d%H%M%S")),
                     "coverage": policy_obj.get('coverage', policy_obj.get('coverage_amount', 0.0)) or 0.0,
                     "premium": policy_obj.get('premium', 0.0) or 0.0,
+                    "status": policy_obj.get('status', 'Active'),  # Ensure status is always set
                     # personalDetails is non-null in the Policy model, provide at least an empty dict
                     "personalDetails": policy_obj.get('personalDetails') or doc.get('personal_details') or {},
                     "policyDocument": policy_obj.get('policyDocument') or policy_obj.get('policy_document') or None,
