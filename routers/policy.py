@@ -17,7 +17,11 @@ def get_db():
 @router.post("/")
 def create_policy(policy: schemas.PolicyCreate, db: Session = Depends(get_db)):
     # Create a Policy record. PolicyCreate includes userId per schema.
-    policy_obj = crud.create_entry(db, models.Policy, policy)
+    # Ensure status is set if not provided
+    policy_dict = crud._to_dict(policy)
+    if not policy_dict.get('status'):
+        policy_dict['status'] = 'Active'
+    policy_obj = crud.create_entry(db, models.Policy, policy_dict)
     return {
         "policyId": policy_obj.id,
         "userId": getattr(policy_obj, "userId", None),
@@ -54,23 +58,52 @@ def read_policies(db: Session = Depends(get_db)):
              "policyDocument": p.policyDocument} for p in policies]
 
 
-@router.get("/user/{user_id}", response_model=list[schemas.Policy])
+@router.get("/user/{user_id}")
 def get_policies_by_user(user_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    policies = crud.get_policies_by_user(db, user_id, skip, limit)
-    return [{"policyId": p.id,
-             "userId": getattr(p, "userId", None),
-             "type": p.type,
-             "planName": p.planName,
-             "policyNumber": p.policyNumber,
-             "coverage": p.coverage,
-             "premium": p.premium,
-             "tenure": getattr(p, "tenure", None),
-             "startDate": p.startDate,
-             "expiryDate": p.expiryDate,
-             "benefits": p.benefits,
-             "nominee": p.nominee,
-             "nomineeId": p.nomineeId,
-             "policyDocument": p.policyDocument} for p in policies]
+    try:
+        policies = crud.get_policies_by_user(db, user_id, skip, limit)
+        result = []
+        for p in policies:
+            # Convert enum to its value string (life_insurance, vehicle_insurance, health_insurance)
+            policy_type = p.type.value if hasattr(p.type, 'value') else str(p.type)
+            
+            # Build response dict with safe defaults
+            policy_dict = {
+                "policyId": p.id,
+                "userId": getattr(p, "userId", None),
+                "type": policy_type,
+                "planName": p.planName or "",
+                "policyNumber": p.policyNumber or "",
+                "coverage": float(p.coverage) if p.coverage else 0.0,
+                "premium": float(p.premium) if p.premium else 0.0,
+                "status": p.status or "Active",
+                "tenure": getattr(p, "tenure", None),
+            }
+            
+            # Add optional date fields
+            if p.startDate:
+                policy_dict["startDate"] = p.startDate.isoformat() if hasattr(p.startDate, 'isoformat') else str(p.startDate)
+            if p.expiryDate:
+                policy_dict["expiryDate"] = p.expiryDate.isoformat() if hasattr(p.expiryDate, 'isoformat') else str(p.expiryDate)
+            
+            # Add optional fields
+            if p.benefits:
+                policy_dict["benefits"] = p.benefits
+            if p.nominee:
+                policy_dict["nominee"] = p.nominee
+            if p.nomineeId:
+                policy_dict["nomineeId"] = p.nomineeId
+            if p.policyDocument:
+                policy_dict["policyDocument"] = p.policyDocument
+            if p.personalDetails:
+                policy_dict["personalDetails"] = p.personalDetails
+                
+            result.append(policy_dict)
+        return result
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error fetching policies: {str(e)}")
 
 
 @router.get("/type/{policy_type}", response_model=list[schemas.Policy])

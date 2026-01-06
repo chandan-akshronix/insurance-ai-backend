@@ -32,6 +32,7 @@ def create_entry(db: Session, model, data: Any, return_id: bool = False):
     Returns the created ORM object or primary key value when return_id=True.
     """
     payload = _to_dict(data)
+    print(f"DEBUG: Creating entry for {model.__name__}. Payload: {payload}")
     db_obj = model(**payload)
     db.add(db_obj)
     db.commit()
@@ -189,10 +190,25 @@ def get_application_process(db: Session, application_id: str):
     return db.query(models.ApplicationProcess).filter(models.ApplicationProcess.applicationId == application_id).first()
 
 
-def list_application_processes(db: Session, status: Optional[str] = None):
+def list_application_processes(db: Session, status: Optional[str] = None, application_type: Optional[str] = None):
+    print(f"DEBUG: list_application_processes. status={status}, application_type={application_type}")
     query = db.query(models.ApplicationProcess)
     if status:
         query = query.filter(models.ApplicationProcess.status == status)
+    if application_type:
+        query = query.filter(models.ApplicationProcess.applicationtype == application_type)
     return query.all()
+
+
+def get_claim_application(db: Session, application_id: str):
+    return db.query(models.ClaimApplication).filter(models.ClaimApplication.applicationId == application_id).first()
+
+
+def list_claim_applications(db: Session, status: Optional[str] = None):
+    query = db.query(models.ClaimApplication)
+    if status:
+        query = query.filter(models.ClaimApplication.status == status)
+    return query.all()
+
 
 

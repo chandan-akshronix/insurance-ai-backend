@@ -41,6 +41,9 @@ async def create_application(request: Request, payload: dict):
     coll = db.get_collection('life_insurance_applications')
     # ensure we have a mutable dict
     doc = dict(payload or {})
+    # Generate a string id upfront
+    doc_id = str(ObjectId())
+    doc['_id'] = doc_id
 
     # Optionally create a SQL Policy if the client provided a `policy` object
     # or `policy` key contains a dict with policy fields. After creating
@@ -58,6 +61,7 @@ async def create_application(request: Request, payload: dict):
                     "policyNumber": policy_obj.get('policyNumber') or ("LIF" + datetime.utcnow().strftime("%Y%m%d%H%M%S")),
                     "coverage": policy_obj.get('coverage', policy_obj.get('coverage_amount', 0.0)) or 0.0,
                     "premium": policy_obj.get('premium', 0.0) or 0.0,
+                    "status": policy_obj.get('status', 'Active'),  # Ensure status is always set
                     # personalDetails is non-null in the Policy model, provide at least an empty dict
                     "personalDetails": policy_obj.get('personalDetails') or doc.get('personal_details') or {},
                     "policyDocument": policy_obj.get('policyDocument') or policy_obj.get('policy_document') or None,
@@ -65,13 +69,15 @@ async def create_application(request: Request, payload: dict):
                     "expiryDate": policy_obj.get('expiryDate'),
                     "benefits": policy_obj.get('benefits'),
                     "nominee": policy_obj.get('nominee'),
-                    "nomineeId": policy_obj.get('nomineeId')
+                    "nomineeId": policy_obj.get('nomineeId'),
+                    "applicationId": doc_id # Store the Mongo ID in SQL
                 }
 
                 # create the Policy SQL row and get its id
                 policy_id = crud.create_entry(db, models.Policy, policy_payload, return_id=True)
-                # store numeric id in the Mongo document
+                # store numeric id and policyNumber in the Mongo document
                 doc['policy'] = policy_id
+                doc['policyNumber'] = policy_payload.get("policyNumber")
             finally:
                 db.close()
     except Exception:
@@ -84,9 +90,7 @@ async def create_application(request: Request, payload: dict):
     # only set timestamps if not provided
     doc.setdefault('created_at', now)
     doc['updated_at'] = now
-    # Generate a string id upfront so we can store it as _id directly (avoid ObjectId wrapper in JSON)
-    doc_id = str(ObjectId())
-    doc['_id'] = doc_id
+    
     await coll.insert_one(doc)
 
     # -------------------------------------------------------------
