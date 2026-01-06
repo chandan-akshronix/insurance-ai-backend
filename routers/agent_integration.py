@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, HTTPException, Body, Query, Request
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from database import get_db
@@ -9,6 +9,7 @@ import os
 import json
 
 AGENT_SERVER_URL = os.getenv("AGENT_SERVER_URL", "http://127.0.0.1:8001")
+CLAIM_AGENT_URL = os.getenv("CLAIM_AGENT_URL", "http://127.0.0.1:8002")
 
 
 router = APIRouter(
@@ -22,42 +23,153 @@ def sync_agent_state(process: schemas.ApplicationProcessCreate, db: Session = De
     """
     Called by the Agent to create or update the application process state.
     """
-    # Check if exists
+    import traceback
+    try:
+        with open("debug_sync.log", "a") as f:
+            f.write(f"\n[{datetime.now()}] Handling sync request for {process.applicationId}\n")
+    except:
+        pass
+
+    # print(f"DEBUG: Syncing agent state for {process.applicationId}. applicationtype: {process.applicationtype}")
+    
+    try:
+        # Handle Claims separately
+        if process.applicationtype == "claim":
+             db_claim = crud.get_claim_application(db, process.applicationId)
+             if db_claim:
+                 update_data = process.model_dump(exclude_unset=True)
+                 update_data["lastUpdated"] = datetime.now().date()
+                 
+                 updated_claim_app = crud.update_by_id(db, models.ClaimApplication, "id", db_claim.id, update_data)
+                 
+                 # Sync status to main Claim table if linked
+                 if updated_claim_app and updated_claim_app.claim_record_id and "status" in update_data:
+                      crud.update_by_id(db, models.Claim, "id", updated_claim_app.claim_record_id, {"status": update_data["status"]})
+                      
+                 return updated_claim_app
+             else:
+                 # Process is ApplicationProcessCreate, need to convert to ClaimApplicationCreate compat/dict
+                 process_dict = process.model_dump()
+                 process_dict["lastUpdated"] = datetime.now().date()
+                 
+                 # Convert to ClaimApplicationCreate to validation (Optional) or just pass dict to create_entry
+                 # claim_process = schemas.ClaimApplicationCreate(**process_dict) # This strips lastUpdated if not in schema
+
+                 # Pass dict directly to CRUD to ensure all fields (like lastUpdated) are preserved
+                 new_claim = crud.create_entry(db, models.ClaimApplication, process_dict)
+                 
+                 # Sync status to main Claim table if linked
+                 if new_claim.claim_record_id:
+                     crud.update_by_id(db, models.Claim, "id", new_claim.claim_record_id, {"status": new_claim.status})
+                     
+                 return new_claim
+    except Exception as e:
+        msg = f"ERROR in sync_agent_state: {e}\n{traceback.format_exc()}"
+        print(msg)
+        try:
+            with open("debug_sync_error.log", "a") as f:
+                f.write(f"\n[{datetime.now()}] {msg}\n")
+        except:
+            pass
+        # Return the error details to the caller (Agent) so it shows up in logs
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=500, content={"detail": f"Backend Exception: {str(e)}", "trace": traceback.format_exc()})
+
+    # Legacy / Policy check
     db_process = crud.get_application_process(db, process.applicationId)
     if db_process:
-        # Update existing
-        # We need to compute values to update. 
-        # Note: 'process' is ApplicationProcessCreate, which might have different fields than Update
-        # But here we treat it as an upsert payload suitable for both.
-        
         update_data = process.model_dump(exclude_unset=True)
         update_data["lastUpdated"] = datetime.now().date()
-        
         return crud.update_by_id(db, models.ApplicationProcess, "id", db_process.id, update_data)
     else:
-        # Create new
-        # Set lastUpdated same as startTime if not provided
-        if not process.lastUpdated:
-            process_dict = process.model_dump()
-            process_dict["lastUpdated"] = datetime.now().date()
-            # If generated from Pydantic model it might be simpler
-            process = schemas.ApplicationProcessCreate(**process_dict)
+        process_dict = process.model_dump()
+        process_dict["lastUpdated"] = datetime.now().date()
+        process_create = schemas.ApplicationProcessCreate(**process_dict)
             
-        return crud.create_entry(db, models.ApplicationProcess, process)
+        return crud.create_entry(db, models.ApplicationProcess, process_create)
 
 @router.get("/applications", response_model=List[schemas.ApplicationProcess])
-def get_applications(status: Optional[str] = None, db: Session = Depends(get_db)):
+def get_applications(status: Optional[str] = None, application_type: Optional[str] = Query(None, alias="type"), db: Session = Depends(get_db)):
     """
     Get list of application processes. Used by Admin Panel AI Process Flow.
     """
-    return crud.list_application_processes(db, status)
+    try:
+        with open("admin_debug.log", "a") as f:
+            f.write(f"DEBUG: get_applications. application_type={application_type}, status={status}\n")
+    except:
+        pass
+        
+    if application_type == "claim":
+        return crud.list_claim_applications(db, status)
+        
+    return crud.list_application_processes(db, status, application_type)
+
 
 @router.get("/application/{application_id}", response_model=schemas.ApplicationProcess)
-def get_application(application_id: str, db: Session = Depends(get_db)):
+async def get_application(application_id: str, request: Request, db: Session = Depends(get_db)):
     """
     Get detailed application process. Used by Admin Panel Case Details.
     """
     process = crud.get_application_process(db, application_id)
+    if not process:
+        # Try finding in claims table
+        process = crud.get_claim_application(db, application_id)
+        
+    if not process:
+        # Fallback: Try finding in MongoDB (for claims that exist but sync failed)
+        try:
+            db_mongo = getattr(request.app, 'mongodb', None)
+            if db_mongo is not None:
+                doc = await db_mongo.get_collection('claims').find_one({'_id': application_id})
+                
+                if doc:
+                    # Map Mongo doc to ApplicationProcess schema
+                    # We need to construct a valid ApplicationProcess object
+                    print(f"DEBUG: Found claim {application_id} in MongoDB (fallback)")
+                    
+                    # Create fake int ID from hash of string ID
+                    fake_id = int(hash(application_id) % 1000000)
+                    if fake_id < 0: fake_id = -fake_id
+                    
+                    # Extract status and step
+                    status = doc.get("status", "new_claim")
+                    current_step = "ingest" # default
+                    if status == "approved": current_step = "final_decision"
+                    elif status == "rejected": current_step = "final_decision"
+                    
+                    # Map agent data
+                    agent_data = doc # The whole doc is essentially agent data in Mongo
+                    
+                    # Create object
+                    process_dict = {
+                        "id": fake_id,
+                        "applicationId": application_id,
+                        "status": status,
+                        "currentStep": current_step,
+                        "applicationtype": "claim",
+                        "startTime": datetime.now().date(), # Fallback
+                        "lastUpdated": datetime.now().date(),
+                        "agentData": agent_data,
+                        "stepHistory": doc.get("step_history", []),
+                        "auditTrail": [],
+                        "customerId": doc.get("user_id") or doc.get("userId"),
+                        "reviewReason": None
+                    }
+                    
+                    # Handle date parsing for startTime if present
+                    if doc.get("created_at"):
+                        try:
+                            if isinstance(doc["created_at"], str):
+                                process_dict["startTime"] = datetime.fromisoformat(doc["created_at"].replace('Z', '+00:00')).date()
+                            elif isinstance(doc["created_at"], datetime):
+                                process_dict["startTime"] = doc["created_at"].date()
+                        except:
+                            pass
+                            
+                    return process_dict
+        except Exception as e:
+            print(f"Error in MongoDB fallback: {e}")
+
     if not process:
         raise HTTPException(status_code=404, detail="Application process not found")
     return process
@@ -72,7 +184,14 @@ def submit_review_decision(
     """
     Submit a human review decision. Updates the DB status and should trigger Agent resume.
     """
+    # Check primary table first, then claims table
     process = crud.get_application_process(db, application_id)
+    model_class = models.ApplicationProcess
+    
+    if not process:
+        process = crud.get_claim_application(db, application_id)
+        model_class = models.ClaimApplication
+        
     if not process:
         raise HTTPException(status_code=404, detail="Application process not found")
     
@@ -80,8 +199,7 @@ def submit_review_decision(
     update_data = {"lastUpdated": datetime.now().date(), "reviewReason": reason}
     
     if action == "approve":
-        update_data["status"] = "approved" # Or 'processing' if it goes back to agent
-        # TODO: Trigger Agent Resume (Webhook to Agent Server)
+        update_data["status"] = "approved" 
     elif action == "reject":
         update_data["status"] = "rejected"
     elif action == "request_docs":
@@ -89,7 +207,11 @@ def submit_review_decision(
     elif action == "escalate":
         update_data["status"] = "escalate_to_senior"
         
-    crud.update_by_id(db, models.ApplicationProcess, "id", process.id, update_data)
+    crud.update_by_id(db, model_class, "id", process.id, update_data)
+    
+    # Sync to main Claim table if this is a ClaimApplication
+    if isinstance(process, models.ClaimApplication) and process.claim_record_id and "status" in update_data:
+         crud.update_by_id(db, models.Claim, "id", process.claim_record_id, {"status": update_data["status"]})
     
     # Trigger Agent Resume for ALL decisions (Approve, Reject, Escalate, Docs)
     try:
@@ -102,11 +224,15 @@ def submit_review_decision(
             "action": agent_action,
             "override_notes": reason
         }
-        # Fire and forget (or log error)
-        # We use a short timeout to not block the admin 
-        requests.post(f"{AGENT_SERVER_URL}/approve", json=payload, timeout=5)
+        # Select target agent based on application type
+        target_url = AGENT_SERVER_URL
+        if getattr(process, 'applicationtype', None) == 'claim':
+            target_url = CLAIM_AGENT_URL
+            
+        requests.post(f"{target_url}/approve", json=payload, timeout=5)
     except Exception as e:
-        print(f"❌ Error resuming agent workflow at {AGENT_SERVER_URL}: {e}")
+        target_url = CLAIM_AGENT_URL if getattr(process, 'applicationtype', None) == 'claim' else AGENT_SERVER_URL
+        print(f"❌ Error resuming agent workflow at {target_url}: {e}")
     
     return {"message": f"Review action '{action}' submitted successfully", "application_id": application_id}
 

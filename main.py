@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -7,10 +10,8 @@ from database import engine, Base
 from routers import users, policy, claims, products, contact, quotation, documents, nominee, activities, notifications, payments, auth, public, life_insurance, agent_integration
 from models import *
 import os
-from dotenv import load_dotenv
 from mongo import connect_to_mongo, close_mongo
 
-load_dotenv()
 
 import logging
 logger = logging.getLogger(__name__)
@@ -83,6 +84,12 @@ app.mount('/uploads', StaticFiles(directory=uploads_dir), name='uploads')
 
 @app.on_event("startup")
 async def startup_events():
+    # Print all registered routes for debugging
+    logger.info("Listing all registered routes:")
+    for route in app.routes:
+        if hasattr(route, 'path'):
+            logger.info(f"Route: {route.path} [{getattr(route, 'methods', 'ANY')}]")
+
     # connect to MongoDB
     try:
         await connect_to_mongo(app)

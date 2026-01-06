@@ -102,6 +102,7 @@ class PolicyBase(BaseModel):
     nomineeId: int
     personalDetails: PersonalDetails
     policyDocument: str
+    applicationId: Optional[str] = None
    
 
 
@@ -112,6 +113,7 @@ class PolicyCreate(PolicyBase):
 class Policy(PolicyBase):
     policyId: int
     userId: Optional[int] = None
+    applicationId: Optional[str] = None
     model_config = {"from_attributes": True}
 
 class PolicyUpdate(BaseModel):
@@ -330,6 +332,8 @@ class ApplicationProcessBase(BaseModel):
     status: str
     currentStep: str
     assignedTo: Optional[str] = None
+    applicationtype: Optional[str] = "policy"
+
 
 
 class ApplicationProcessCreate(ApplicationProcessBase):
@@ -338,6 +342,7 @@ class ApplicationProcessCreate(ApplicationProcessBase):
     agentData: Optional[dict] = None
     stepHistory: Optional[List[dict]] = None
     auditTrail: Optional[List[dict]] = None
+    lastUpdated: Optional[date] = None
 
 
 class ApplicationProcessUpdate(BaseModel):
@@ -348,10 +353,57 @@ class ApplicationProcessUpdate(BaseModel):
     auditTrail: Optional[List[dict]] = None
     reviewReason: Optional[str] = None
     assignedTo: Optional[str] = None
+    applicationtype: Optional[str] = None
     lastUpdated: Optional[date] = None
 
 
+
 class ApplicationProcess(ApplicationProcessBase):
+    id: int
+    agentData: Optional[dict] = None
+    stepHistory: Optional[List[dict]] = None
+    auditTrail: Optional[List[dict]] = None
+    reviewReason: Optional[str] = None
+    startTime: date
+    lastUpdated: Optional[date] = None
+    customerId: Optional[int] = None
+
+
+    model_config = {"from_attributes": True}
+
+
+# ---------- CLAIM APPLICATION ------------------------------------------------------------------
+
+class ClaimApplicationBase(BaseModel):
+    applicationId: str
+    status: str
+    currentStep: str
+    assignedTo: Optional[str] = None
+    applicationtype: str = "claim"
+    claim_record_id: Optional[int] = None
+
+
+class ClaimApplicationCreate(ClaimApplicationBase):
+    customerId: Optional[int] = None
+    startTime: date
+    agentData: Optional[dict] = None
+    stepHistory: Optional[List[dict]] = None
+    auditTrail: Optional[List[dict]] = None
+    lastUpdated: Optional[date] = None
+
+
+class ClaimApplicationUpdate(BaseModel):
+    status: Optional[str] = None
+    currentStep: Optional[str] = None
+    agentData: Optional[dict] = None
+    stepHistory: Optional[List[dict]] = None
+    auditTrail: Optional[List[dict]] = None
+    reviewReason: Optional[str] = None
+    assignedTo: Optional[str] = None
+    lastUpdated: Optional[date] = None
+
+
+class ClaimApplication(ClaimApplicationBase):
     id: int
     agentData: Optional[dict] = None
     stepHistory: Optional[List[dict]] = None

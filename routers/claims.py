@@ -6,6 +6,10 @@ from typing import List
 from database import SessionLocal
 import crud, models
 import logging
+import requests
+import os
+
+CLAIM_AGENT_URL = os.getenv("CLAIM_AGENT_URL", "http://localhost:8002")
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +46,10 @@ async def create_claim_application(request: Request, payload: dict):
     # ensure we have a mutable dict
     doc = dict(payload or {})
 
+    policy_number = doc.get('policyNumber') or doc.get('policy_number')
+    if policy_number:
+        logger.info(f"[CLAIM_CREATE] Received policyNumber in payload: {policy_number}")
+
     # Optionally create a SQL Claim if the client provided a `claim` object
     # or `claim` key contains a dict with claim fields. After creating
     # the SQL record we will store its id in the Mongo document under `claim`.
@@ -65,6 +73,52 @@ async def create_claim_application(request: Request, payload: dict):
         import logging
         logging.exception('Failed to create SQL claim from claims-application payload')
 
+    # --- Automated Linkage to Original Insurance Application ---
+    insurance_app_id = doc.get("insurance_application_id")
+    
+    if not insurance_app_id:
+        try:
+            policy_id = doc.get('policy_id') or doc.get('policyId')
+            if policy_id:
+                # Search in life insurance applications (primary source for now)
+                life_app_coll = db.get_collection('life_insurance_applications')
+                
+                # Robust query to find the originating application
+                query = {
+                    "$or": [
+                        {"policy": str(policy_id)},
+                        {"policy": int(policy_id) if str(policy_id).isdigit() else None},
+                        {"policy_id": str(policy_id)},
+                        {"policyId": str(policy_id)},
+                        {"policy_number": str(policy_id)},
+                        {"policyNumber": str(policy_id)}
+                    ]
+                }
+                
+                # If user_id is available, use it to make the lookup more precise
+                user_id = doc.get('user_id') or doc.get('userId')
+                if user_id:
+                    query = {"$and": [
+                        query,
+                        {"$or": [
+                            {"user_id": str(user_id)},
+                            {"userId": str(user_id)},
+                            {"user_id": int(user_id) if str(user_id).isdigit() else None}
+                        ]}
+                    ]}
+
+                original_app = await life_app_coll.find_one(query)
+                if original_app:
+                    insurance_app_id = str(original_app['_id'])
+                    logger.info(f"✅ Linked claim via search fallback: {insurance_app_id}")
+                    
+        except Exception as e:
+            logger.warning(f"Failed to link claim to original insurance application fallback: {e}")
+
+    if insurance_app_id:
+        doc['insurance_application_id'] = insurance_app_id
+    # -----------------------------------------------------------------
+
     now = datetime.utcnow()
     # only set timestamps if not provided
     doc.setdefault('created_at', now)
@@ -86,20 +140,50 @@ async def create_claim_application(request: Request, payload: dict):
                 "startTime": datetime.utcnow().date(),
                 "lastUpdated": datetime.utcnow().date(),
                 "customerId": doc.get('user_id') or doc.get('userId'),
-                "agentData": {},
-                "stepHistory": []
+                "applicationtype": "claim",
+                "stepHistory": [],
+                "claim_record_id": int(doc['claim']) if doc.get('claim') and str(doc['claim']).isdigit() else None
             }
-            crud.create_entry(sql_db, models.ApplicationProcess, process_data)
+            # Use ClaimApplication model and schema
+            process_obj = schemas.ClaimApplicationCreate(**process_data)
+            crud.create_entry(sql_db, models.ClaimApplication, process_obj)
+
         except Exception as e:
             import logging
-            logging.error(f"Failed to create ApplicationProcess entry for claim: {e}")
+            logging.error(f"Failed to create ClaimApplication entry for claim: {e}")
         finally:
             sql_db.close()
     except Exception as e:
         import logging
         logging.error(f"ApplicationProcess tracking block failed for claim: {e}")
 
+    # --- NEW: Trigger Claim processing Agent Workflow ---
+    try:
+        requests.post(
+            f"{CLAIM_AGENT_URL}/submit_claim",
+            json={"claim_id": doc_id},
+            timeout=1 # Fire and forget
+        )
+        logger.info(f"🚀 Triggered Claim Agent for ID: {doc_id}")
+    except Exception as e:
+        logger.warning(f"Failed to trigger Claim Agent: {e}")
+
     return {'id': doc_id}
+
+
+@router.get('/all-applications', response_model=List[dict])
+async def get_all_claim_applications(request: Request):
+    """Get all claim applications from MongoDB (Admin use)"""
+    logger.info("🔍 ADMIN: Fetching all claim applications from MongoDB...")
+    db = request.app.mongodb
+    if db is None:
+        logger.error("❌ MongoDB client is NOT initialized in request.app")
+        return []
+    coll = db.get_collection('claims')
+    cursor = coll.find({}).sort('created_at', -1)
+    results = [_oid_str(d) async for d in cursor]
+    logger.info(f"✅ Found {len(results)} claims in MongoDB")
+    return results
 
 
 @router.get('/application/user/{user_id}', response_model=List[dict])

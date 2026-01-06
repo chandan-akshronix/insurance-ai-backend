@@ -100,6 +100,7 @@ class Policy(Base):
     nomineeId = Column(Integer, ForeignKey("nominees.id"), nullable=True)
     personalDetails = Column(JSON, nullable=False)
     policyDocument = Column(String, nullable=True)
+    applicationId = Column(String, nullable=True) # MongoDB Application ID
     # Relationship to user
     user = relationship("User", back_populates="policies")
 
@@ -242,7 +243,35 @@ class ApplicationProcess(Base):
     reviewReason = Column(String, nullable=True)
     assignedTo = Column(String, nullable=True)
     customerId = Column(Integer, ForeignKey("users.id"), nullable=True)
+    applicationtype = Column(String, nullable=True, default="policy")
     startTime = Column(Date)
     lastUpdated = Column(Date)
 
     user = relationship("User")
+
+
+class ClaimApplication(Base):
+    __tablename__ = "claim_applications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    # Link to the main 'claims' table if needed, or just use applicationId as the claim_id
+    applicationId = Column(String, unique=True, index=True) 
+    status = Column(String)
+    currentStep = Column(String)
+    agentData = Column(JSON, nullable=True)
+    stepHistory = Column(JSON, nullable=True)
+    auditTrail = Column(JSON, nullable=True)
+    reviewReason = Column(String, nullable=True)
+    assignedTo = Column(String, nullable=True)
+    customerId = Column(Integer, ForeignKey("users.id"), nullable=True)
+    # applicationtype is technically redundant here as table implies 'claim', but keeping for schema compatibility
+    applicationtype = Column(String, nullable=True, default="claim")
+    startTime = Column(Date)
+    lastUpdated = Column(Date)
+    
+    # Optional: Link to the textual/financial claim record
+    claim_record_id = Column(Integer, ForeignKey("claims.id"), nullable=True)
+
+    user = relationship("User")
+    claim_record = relationship("Claim")
+
