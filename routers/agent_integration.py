@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Body, Query, Request
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Union
 from database import get_db
 import models, schemas, crud
 from datetime import datetime
@@ -18,75 +18,113 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-@router.post("/sync", response_model=schemas.ApplicationProcess)
-def sync_agent_state(process: schemas.ApplicationProcessCreate, db: Session = Depends(get_db)):
+@router.post("/sync")
+async def sync_agent_state(request: Request, db: Session = Depends(get_db)):
     """
-    Called by the Agent to create or update the application process state.
+    Syncs agent state with backend DB.
+    Handles both 'claim' and 'policy' application types.
+    Manual parsing to catch all crashes.
     """
+    import json
     import traceback
-    try:
-        with open("debug_sync.log", "a") as f:
-            f.write(f"\n[{datetime.now()}] Handling sync request for {process.applicationId}\n")
-    except:
-        pass
-
-    # print(f"DEBUG: Syncing agent state for {process.applicationId}. applicationtype: {process.applicationtype}")
+    
+    print(f"\n\n--- SYNC REQUEST RECEIVED (ASYNC) ---")
     
     try:
-        # Handle Claims separately
-        if process.applicationtype == "claim":
-             db_claim = crud.get_claim_application(db, process.applicationId)
-             if db_claim:
-                 update_data = process.model_dump(exclude_unset=True)
-                 update_data["lastUpdated"] = datetime.now().date()
-                 
-                 updated_claim_app = crud.update_by_id(db, models.ClaimApplication, "id", db_claim.id, update_data)
-                 
-                 # Sync status to main Claim table if linked
-                 if updated_claim_app and updated_claim_app.claim_record_id and "status" in update_data:
-                      crud.update_by_id(db, models.Claim, "id", updated_claim_app.claim_record_id, {"status": update_data["status"]})
-                      
-                 return updated_claim_app
-             else:
-                 # Process is ApplicationProcessCreate, need to convert to ClaimApplicationCreate compat/dict
-                 process_dict = process.model_dump()
-                 process_dict["lastUpdated"] = datetime.now().date()
-                 
-                 # Convert to ClaimApplicationCreate to validation (Optional) or just pass dict to create_entry
-                 # claim_process = schemas.ClaimApplicationCreate(**process_dict) # This strips lastUpdated if not in schema
-
-                 # Pass dict directly to CRUD to ensure all fields (like lastUpdated) are preserved
-                 new_claim = crud.create_entry(db, models.ClaimApplication, process_dict)
-                 
-                 # Sync status to main Claim table if linked
-                 if new_claim.claim_record_id:
-                     crud.update_by_id(db, models.Claim, "id", new_claim.claim_record_id, {"status": new_claim.status})
-                     
-                 return new_claim
-    except Exception as e:
-        msg = f"ERROR in sync_agent_state: {e}\n{traceback.format_exc()}"
-        print(msg)
+        # Manual Body Parsing
         try:
-            with open("debug_sync_error.log", "a") as f:
-                f.write(f"\n[{datetime.now()}] {msg}\n")
+            payload = await request.json()
+        except Exception as body_e:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON Body: {body_e}")
+
+        # Extract data
+        process_data = payload
+        app_id = process_data.get("applicationId")
+        app_type = process_data.get("applicationtype", "policy") # Default to policy
+        
+        print(f"Syncing ID: {app_id}, Type: {app_type}")
+
+        if not app_id:
+            raise HTTPException(status_code=422, detail="Missing applicationId")
+
+        # ---------------------------
+        # CLAIM HANDLING
+        # ---------------------------
+        if app_type == "claim":
+            db_claim = crud.get_claim_application(db, app_id)
+            
+            # Prepare data for update/create
+            # Ensure lastUpdated is set
+            process_data["lastUpdated"] = datetime.now().date()
+            
+            # Helper to filter fields valid for ClaimApplication model
+            valid_fields = {c.name for c in models.ClaimApplication.__table__.columns}
+            filtered_data = {k: v for k, v in process_data.items() if k in valid_fields}
+            
+            if db_claim:
+                print(f"Updating existing claim {app_id}")
+                updated = crud.update_by_id(db, models.ClaimApplication, "id", db_claim.id, filtered_data)
+                
+                # Sync Master Claim Status if linked
+                if updated.claim_record_id and "status" in filtered_data:
+                     try:
+                        crud.update_by_id(db, models.Claim, "id", updated.claim_record_id, {"status": filtered_data["status"]})
+                     except:
+                        pass # Ignore master claim sync error if any
+                
+                return {"status": "success", "action": "updated", "id": app_id}
+            else:
+                print(f"Creating new claim {app_id}")
+                # Ensure validation of minimal fields if needed, or trust agent
+                new_claim = crud.create_entry(db, models.ClaimApplication, filtered_data)
+                
+                # Sync Master Claim Status if linked
+                if new_claim.claim_record_id:
+                     try:
+                         crud.update_by_id(db, models.Claim, "id", new_claim.claim_record_id, {"status": new_claim.status})
+                     except:
+                         pass
+                
+                return {"status": "success", "action": "created", "id": app_id}
+
+        # ---------------------------
+        # POLICY / LEGACY HANDLING
+        # ---------------------------
+        else:
+            db_process = crud.get_application_process(db, app_id)
+            
+            process_data["lastUpdated"] = datetime.now().date()
+            
+            # Use Pydantic for legacy validation if desired, or manual filter
+            # Using manual filter to be safe against schema drift
+            valid_fields = {c.name for c in models.ApplicationProcess.__table__.columns}
+            filtered_data = {k: v for k, v in process_data.items() if k in valid_fields}
+
+            if db_process:
+                crud.update_by_id(db, models.ApplicationProcess, "id", db_process.id, filtered_data)
+                return {"status": "success", "action": "updated", "id": app_id}
+            else:
+                crud.create_entry(db, models.ApplicationProcess, filtered_data)
+                return {"status": "success", "action": "created", "id": app_id}
+
+    except Exception as e:
+        error_msg = f"Backend Sync Error: {str(e)}"
+        print(error_msg)
+        traceback.print_exc()
+        
+        try:
+            # Using absolute path to be sure
+            log_path = os.path.join(os.getcwd(), "NUCLEAR_DEBUG.log")
+            with open(log_path, "a") as f:
+                f.write(f"\n\n--- ERROR {datetime.now()} ---\n{error_msg}\n")
+                f.write(traceback.format_exc())
+                if 'payload' in locals():
+                    f.write(f"\nPayload Keys: {list(payload.keys())}\n")
         except:
             pass
-        # Return the error details to the caller (Agent) so it shows up in logs
-        from fastapi.responses import JSONResponse
-        return JSONResponse(status_code=500, content={"detail": f"Backend Exception: {str(e)}", "trace": traceback.format_exc()})
-
-    # Legacy / Policy check
-    db_process = crud.get_application_process(db, process.applicationId)
-    if db_process:
-        update_data = process.model_dump(exclude_unset=True)
-        update_data["lastUpdated"] = datetime.now().date()
-        return crud.update_by_id(db, models.ApplicationProcess, "id", db_process.id, update_data)
-    else:
-        process_dict = process.model_dump()
-        process_dict["lastUpdated"] = datetime.now().date()
-        process_create = schemas.ApplicationProcessCreate(**process_dict)
             
-        return crud.create_entry(db, models.ApplicationProcess, process_create)
+        # Return 500 but with detail so Agent sees it
+        raise HTTPException(status_code=500, detail=error_msg)
 
 @router.get("/applications", response_model=List[schemas.ApplicationProcess])
 def get_applications(status: Optional[str] = None, application_type: Optional[str] = Query(None, alias="type"), db: Session = Depends(get_db)):
