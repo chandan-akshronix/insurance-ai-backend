@@ -296,7 +296,7 @@ async def upload_document(
             unique_name = f"{uuid.uuid4()}{ext}"
             # Create nested folder structure (creates all parent directories if needed)
             dest_folder = os.path.join(uploads_dir, folder)
-            os.makedirs(dest_folder, exist_ok=True, parents=True)
+            os.makedirs(dest_folder, exist_ok=True)
             dest_path = os.path.join(dest_folder, unique_name)
             with open(dest_path, 'wb') as fh:
                 fh.write(file_content)

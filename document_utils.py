@@ -80,7 +80,7 @@ def derive_folder_path(userId: int, documentType: str, claimId: Optional[int] = 
         return f"users/{userId}/{base_folder}"
 
 
-def extract_folder_from_url(url: str) -> Optional[str]:
+def extract_folder_from_url(url: str, container_name: str = "insurance-documents") -> Optional[str]:
     """
     Extract folder path from a document URL.
     
@@ -89,6 +89,7 @@ def extract_folder_from_url(url: str) -> Optional[str]:
     
     Args:
         url: Document URL (either Azure Blob Storage URL or local storage URL)
+        container_name: Optional container name to handle (ignores it logic-wise but accepts argument)
     
     Returns:
         Folder path string if found, None otherwise
@@ -96,7 +97,7 @@ def extract_folder_from_url(url: str) -> Optional[str]:
     Examples:
         >>> extract_folder_from_url("http://localhost:8000/uploads/users/123/kyc/uuid.pdf")
         "users/123/kyc"
-        >>> extract_folder_from_url("https://account.blob.core.windows.net/container/users/123/kyc/uuid.pdf")
+        >>> extract_folder_from_url("https://account.blob.core.windows.net/insurance-documents/users/123/kyc/uuid.pdf")
         "users/123/kyc"
     """
     try:

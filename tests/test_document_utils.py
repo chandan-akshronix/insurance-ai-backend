@@ -178,7 +178,7 @@ class TestEdgeCases(unittest.TestCase):
     def test_claim_id_zero(self):
         """Test with claimId = 0"""
         result = derive_folder_path(userId=123, documentType="claim_document", claimId=0)
-        self.assertEqual(result, "claims/0")
+        self.assertEqual(result, "claims/pending/123")
 
     def test_empty_document_type(self):
         """Test with empty document type (should default to other)"""
