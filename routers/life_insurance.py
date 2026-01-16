@@ -72,13 +72,54 @@ async def create_application(request: Request, payload: dict):
                     "nomineeId": policy_obj.get('nomineeId'),
                     "applicationId": doc_id # Store the Mongo ID in SQL
                 }
+                
+                # Ensure doc has the policyNumber IMMEDIATELY so it's returned even if SQL creation fails
+                doc['policyNumber'] = policy_payload.get("policyNumber")
 
                 # create the Policy SQL row and get its id
                 policy_id = crud.create_entry(db, models.Policy, policy_payload, return_id=True)
                 # store numeric id and policyNumber in the Mongo document
+                # store numeric id and policyNumber in the Mongo document
                 doc['policy'] = policy_id
-                doc['policyNumber'] = policy_payload.get("policyNumber")
+                
             finally:
+                # NEW: Create a SQL Payment record if payment details exist in the doc
+                try:
+                    payment_info = doc.get('payment')
+                    if payment_info and isinstance(payment_info, dict):
+                         # Safely get policy_id if it exists
+                         safe_policy_id = locals().get('policy_id')
+                         
+                         # Handle userId conversion safely
+                         raw_user_id = doc.get('user_id') or doc.get('userId')
+                         safe_user_id = None
+                         if raw_user_id and str(raw_user_id).isdigit():
+                             safe_user_id = int(raw_user_id)
+                         
+                         # Prepare payment payload
+                         payment_payload = {
+                             "userId": safe_user_id,
+                             "policyId": safe_policy_id, 
+                             "policyNumber": policy_payload.get("policyNumber") if 'policy_payload' in locals() else None,
+                             "applicationId": doc_id,
+                             "amount": policy_payload.get("premium", 0.0) if 'policy_payload' in locals() else 0.0,
+                             "paymentMethod": payment_info.get('method', 'unknown'),
+                             "status": 'success', 
+                             "orderId": f"ORD-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{doc_id[-4:]}",
+                             "transactionId": f"TXN-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{doc_id[-4:]}",
+                             "paidDate": datetime.utcnow().date(),
+                             "returnUrl": "http://localhost:3000/dashboard", 
+                             "paymentUrl": "http://localhost:3000/pay" 
+                         }
+                         
+                         print(f"Creating SQL Payment record for App ID {doc_id}...")
+                         crud.create_entry(db, models.Payments, payment_payload)
+                         print("SQL Payment record created successfully.")
+
+                except Exception as e:
+                    import logging
+                    logging.exception(f"Failed to create SQL Payment for App ID {doc_id}: {e}")
+                
                 db.close()
     except Exception:
         # don't fail the whole application creation if policy creation fails;
@@ -133,7 +174,13 @@ async def create_application(request: Request, payload: dict):
          import logging
          logging.error(f"Agent trigger block failed: {e}")
 
-    return {'id': doc_id}
+
+
+    # Return the doc_id and the generated policyNumber
+    return {
+        'id': doc_id, 
+        'policyNumber': doc.get('policyNumber')
+    }
 
 
 @router.get('/user/{user_id}', response_model=List[dict])
