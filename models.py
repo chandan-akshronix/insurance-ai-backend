@@ -218,7 +218,9 @@ class Payments(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     userId = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
-    policyId = Column(Integer, ForeignKey("policy.id"))
+    policyId = Column(Integer, ForeignKey("policy.id"), nullable=True)
+    policyNumber = Column(String, nullable=True)
+    applicationId = Column(String, nullable=True)
     amount = Column(Float)
     orderId = Column(String)
     paidDate = Column(Date)

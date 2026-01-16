@@ -19,7 +19,9 @@ def create_payment(payment: schemas.PaymentCreate, db: Session = Depends(get_db)
             "paymentId": getattr(payment_obj, 'id', None),
             "orderId": getattr(payment_obj, 'orderId', None),
             "amount": getattr(payment_obj, 'amount', None),
-            "paymentUrl": getattr(payment_obj, 'paymentUrl', None)
+            "paymentUrl": getattr(payment_obj, 'paymentUrl', None),
+            "policyNumber": getattr(payment_obj, 'policyNumber', None),
+            "applicationId": getattr(payment_obj, 'applicationId', None)
             }
 
 @router.get("/", response_model=list[schemas.Payment])
@@ -35,7 +37,9 @@ def read_payments(db: Session = Depends(get_db)):
              "status": p.status,
              "transactionId": getattr(p, "transactionId", None),
              "returnUrl": getattr(p, "returnUrl", None),
-             "paymentUrl": getattr(p, "paymentUrl", None)} for p in payments]
+             "paymentUrl": getattr(p, "paymentUrl", None),
+             "policyNumber": getattr(p, "policyNumber", None),
+             "applicationId": getattr(p, "applicationId", None)} for p in payments]
 
 @router.get("/{payment_id}", response_model=schemas.Payment)
 def read_payment(payment_id: int, db: Session = Depends(get_db)):
@@ -52,7 +56,9 @@ def read_payment(payment_id: int, db: Session = Depends(get_db)):
             "status": payment.status,
             "transactionId": getattr(payment, "transactionId", None),
             "returnUrl": getattr(payment, "returnUrl", None),
-            "paymentUrl": getattr(payment, "paymentUrl", None)}
+            "paymentUrl": getattr(payment, "paymentUrl", None),
+            "policyNumber": getattr(payment, "policyNumber", None),
+            "applicationId": getattr(payment, "applicationId", None)}
 
 
 @router.get("/policy/{policy_id}", response_model=list[schemas.Payment])
@@ -68,7 +74,9 @@ def get_payments_by_policy(policy_id: int, db: Session = Depends(get_db)):
              "status": p.status,
              "transactionId": getattr(p, "transactionId", None),
              "returnUrl": getattr(p, "returnUrl", None),
-             "paymentUrl": getattr(p, "paymentUrl", None)} for p in payments]
+             "paymentUrl": getattr(p, "paymentUrl", None),
+             "policyNumber": getattr(p, "policyNumber", None),
+             "applicationId": getattr(p, "applicationId", None)} for p in payments]
 
 
 @router.get("/user/{user_id}", response_model=list[schemas.Payment])
@@ -84,7 +92,9 @@ def get_payments_by_user(user_id: int, db: Session = Depends(get_db)):
              "status": p.status,
              "transactionId": getattr(p, "transactionId", None),
              "returnUrl": getattr(p, "returnUrl", None),
-             "paymentUrl": getattr(p, "paymentUrl", None)} for p in payments]
+             "paymentUrl": getattr(p, "paymentUrl", None),
+             "policyNumber": getattr(p, "policyNumber", None),
+             "applicationId": getattr(p, "applicationId", None)} for p in payments]
 
 
 @router.get("/history/{user_id}", response_model=list[schemas.Payment])
@@ -100,4 +110,6 @@ def get_payment_history(user_id: int, db: Session = Depends(get_db)):
              "status": p.status,
              "transactionId": getattr(p, "transactionId", None),
              "returnUrl": getattr(p, "returnUrl", None),
-             "paymentUrl": getattr(p, "paymentUrl", None)} for p in payments]
+             "paymentUrl": getattr(p, "paymentUrl", None),
+             "policyNumber": getattr(p, "policyNumber", None),
+             "applicationId": getattr(p, "applicationId", None)} for p in payments]

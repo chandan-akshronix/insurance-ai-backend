@@ -166,8 +166,8 @@ def get_payments_by_policy(db: Session, policy_id: int):
 
 
 def get_payments_by_user(db: Session, user_id: int):
-    # Get payments through policies
-    return db.query(models.Payments).join(models.Policy).filter(models.Policy.userId == user_id).all()
+    # Get payments directly by userId (includes payments without policies)
+    return db.query(models.Payments).filter(models.Payments.userId == user_id).all()
 
 
 # Nominee-specific queries
