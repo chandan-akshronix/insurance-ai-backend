@@ -307,7 +307,9 @@ class Notification(NotificationBase):
 
 class PaymentBase(BaseModel):
     userId: int
-    policyId: int
+    policyId: Optional[int] = None
+    policyNumber: Optional[str] = None
+    applicationId: Optional[str] = None
     amount: float
     orderId: str
     paidDate: date
